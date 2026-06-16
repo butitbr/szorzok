@@ -61,24 +61,52 @@ def fetch_date_range(start_date: str, end_date: str, delay: float = 1.0):
 
 
 if __name__ == "__main__":
-    # ── Configure date range here ──────────────────────────────────────────────
-    START = "2026-05-01"
-    END   = "2026-05-17"   # update this daily, or use datetime.utcnow()
-    # ──────────────────────────────────────────────────────────────────────────
-
-    from datetime import datetime as _dt
-    END = _dt.utcnow().strftime("%Y-%m-%d")   # always fetch up to today
-
-    results = fetch_date_range(START, END)
+    import os
 
     output_file = "results.json"
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
+    ABSOLUTE_START = "2026-05-01"   # earliest date we ever care about
 
-    total_events = sum(
-        len(sc["events"])
-        for d in results["data"]
-        for sc in d["sportCompetitions"]
-    )
-    print(f"\nDone! {len(results['data'])} day-blocks, {total_events} total events → saved to {output_file}")
+    # ── Load existing results so we can merge rather than overwrite ────────────
+    existing_days: list = []
+    existing_dates: set = set()
+    if os.path.exists(output_file):
+        try:
+            with open(output_file, encoding="utf-8") as f:
+                existing = json.load(f)
+            existing_days  = existing.get("data", [])
+            existing_dates = {d["date"] for d in existing_days}
+        except Exception:
+            pass   # corrupt / empty file → start fresh
+
+    # ── Determine START: day after the latest date we already have ─────────────
+    if existing_dates:
+        last_known = max(existing_dates)
+        START = (datetime.strptime(last_known, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+        print(f"Existing data through {last_known} — fetching from {START} onwards …")
+    else:
+        START = ABSOLUTE_START
+        print(f"No existing data — fetching from {START} …")
+
+    END = datetime.utcnow().strftime("%Y-%m-%d")
+
+    if START > END:
+        print("Already up-to-date — nothing to fetch.")
+    else:
+        new_results = fetch_date_range(START, END)
+
+        # ── Merge: drop any existing days that overlap with new fetch, then combine
+        new_dates  = {d["date"] for d in new_results["data"]}
+        kept_days  = [d for d in existing_days if d["date"] not in new_dates]
+        merged     = sorted(kept_days + new_results["data"], key=lambda d: d["date"])
+
+        with open(output_file, "w", encoding="utf-8") as f:
+            json.dump({"data": merged}, f, ensure_ascii=False, indent=2)
+
+        total_events = sum(
+            len(sc["events"])
+            for d in merged
+            for sc in d["sportCompetitions"]
+        )
+        print(f"\nDone! {len(merged)} day-blocks total ({len(new_results['data'])} new), "
+              f"{total_events} total events → saved to {output_file}")
 
