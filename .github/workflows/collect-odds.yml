@@ -33,21 +33,59 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests
 
+      - name: Restore previous results.json from archive
+        run: |
+          if [ -f results.json.gz ]; then
+            gunzip -c results.json.gz > results.json
+          fi
+
       - name: Run results scraper
         run: python tippmix_scraper.py
 
       - name: Run prematch collector (single snapshot)
         run: python prematch_collector.py
 
+      - name: Compress results.json for git storage
+        run: |
+          if [ -f results.json ]; then
+            gzip -c results.json > results.json.gz.tmp
+            mv results.json.gz.tmp results.json.gz
+          fi
+
+      - name: Upload results.json artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-json
+          path: results.json
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Commit updated data files
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add results.json prematch_odds.db || true
+          FILES_TO_ADD="prematch_odds.db"
+
+          # GitHub rejects any pushed blob over 100 MB. results.json itself can
+          # grow well past that, so we only ever commit its gzip-compressed
+          # form, and even then we double-check the compressed size stays
+          # comfortably under the hard limit before staging it.
+          if [ -f results.json.gz ]; then
+            SIZE=$(stat -c%s results.json.gz)
+            LIMIT=$((95 * 1024 * 1024))
+            if [ "$SIZE" -lt "$LIMIT" ]; then
+              FILES_TO_ADD="$FILES_TO_ADD results.json.gz"
+            else
+              echo "::warning::results.json.gz is ${SIZE} bytes, too close to GitHub's 100 MB file size limit; skipping commit for this file. Full data is available in the 'results-json' workflow artifact."
+            fi
+          fi
+
+          git add $FILES_TO_ADD || true
 
           if git diff --cached --quiet; then
-            echo "No data changes to commit."
+            echo "No safe data changes to commit."
             exit 0
           fi
 
