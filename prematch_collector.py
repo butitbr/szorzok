@@ -96,7 +96,10 @@ def collect():
 
     inserted = 0
     for ev in events:
-        event_id = ev["eventId"]
+        event_id = ev.get("eventId")
+        if not event_id:
+            logging.warning("  Skipping event with missing eventId")
+            continue
         try:
             markets = fetch_event_markets(event_id)
         except Exception as e:
@@ -109,7 +112,12 @@ def collect():
             if "Gólszám" not in market_name:
                 continue
 
-            threshold = float(m.get("specialOddsValue") or 0)
+            raw_threshold = m.get("specialOddsValue")
+            try:
+                threshold = float(str(raw_threshold).replace(",", ".")) if raw_threshold not in (None, "") else 0
+            except (TypeError, ValueError):
+                logging.warning(f"  Skipping market with unparseable specialOddsValue: {raw_threshold!r}")
+                continue
             if threshold == 0:
                 continue
 
